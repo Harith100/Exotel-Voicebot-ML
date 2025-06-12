@@ -25,25 +25,40 @@ audio_utils = AudioUtils()
 # Store active connections
 active_connections = {}
 
-@app.route('/init', methods=['POST'])
+@app.route('/init', methods=['GET', 'POST'])
 def init_call():
     """
     Initial endpoint that Exotel hits to get WebSocket URL
     """
     try:
-        # Get call data from Exotel
-        call_data = request.get_json() or {}
+        # Get call data from Exotel (can be GET params or POST JSON)
+        if request.method == 'GET':
+            call_data = request.args.to_dict()
+        else:
+            call_data = request.get_json() or {}
+        
         call_sid = call_data.get('CallSid', 'unknown')
         
         logger.info(f"Initializing call: {call_sid}")
+        logger.info(f"Call data: {call_data}")
+        logger.info(f"Request method: {request.method}")
+        logger.info(f"Request host: {request.host}")
+        logger.info(f"Request URL: {request.url}")
         
         # Return WebSocket URL for media streaming
-        base_url = request.host_url.replace('http://', 'wss://').replace('https://', 'wss://')
-        ws_url = f"{base_url}media"
+        # Get the base URL and construct WebSocket URL
+        if request.is_secure or 'https' in request.url:
+            ws_protocol = 'wss'
+        else:
+            ws_protocol = 'ws'
+            
+        # Use request.host to get the proper domain
+        ws_url = f"{ws_protocol}://{request.host}/media"
         
         response = {
             "url": ws_url,
-            "status": "initialized"
+            "status": "initialized",
+            "call_sid": call_sid
         }
         
         logger.info(f"Returning WebSocket URL: {ws_url}")
@@ -270,6 +285,19 @@ def send_tts_response(connection_id, text):
                     
     except Exception as e:
         logger.error(f"TTS error: {str(e)}")
+
+@app.route('/test-init', methods=['GET', 'POST'])
+def test_init():
+    """Test endpoint to debug init calls"""
+    return jsonify({
+        "method": request.method,
+        "args": dict(request.args),
+        "json": request.get_json(),
+        "headers": dict(request.headers),
+        "url": request.url,
+        "host": request.host,
+        "is_secure": request.is_secure
+    })
 
 @app.route('/health', methods=['GET'])
 def health_check():
