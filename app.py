@@ -9,7 +9,7 @@ import os
 from sarvam_client import SarvamClient
 from gemini_client import GeminiClient
 from utils import AudioUtils
-
+import socket
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,6 +24,14 @@ audio_utils = AudioUtils()
 
 # Store active connections
 active_connections = {}
+
+@app.route("/dns-test")
+def dns_test():
+    try:
+        ip = socket.gethostbyname("api.sarvam.ai")
+        return f"api.sarvam.ai resolved to: {ip}"
+    except Exception as e:
+        return f"DNS resolution failed: {str(e)}"
 
 @app.route('/init', methods=['GET', 'POST'])
 def init_call():
