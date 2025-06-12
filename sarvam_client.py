@@ -16,7 +16,7 @@ class SarvamClient:
         
         self.base_url = "https://api.sarvam.ai"
         self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "api-subscription-key": self.api_key,
             "Content-Type": "application/json"
         }
         
