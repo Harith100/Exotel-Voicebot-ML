@@ -5,6 +5,7 @@ import logging
 import os
 from typing import Optional, Union
 import io
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,25 @@ class SarvamClient:
         # TTS endpoint  
         self.tts_url = f"{self.base_url}/text-to-speech"
         
+        # Configure session with retry strategy
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
+        
+        # Retry strategy
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            method_whitelist=["HEAD", "GET", "POST"]
+        )
+        
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        
     def speech_to_text(self, audio_data: bytes, final: bool = False) -> Optional[str]:
         """
         Convert audio to text using Sarvam STT API
@@ -37,27 +57,31 @@ class SarvamClient:
             Transcribed text or None if error
         """
         try:
+            # Validate audio data
+            if not audio_data or len(audio_data) == 0:
+                logger.warning("Empty audio data provided")
+                return None
+            
             # Convert audio to base64
             audio_base64 = base64.b64encode(audio_data).decode('utf-8')
             
             # Prepare request payload
             payload = {
-                "model": "saaras:v1",  # Sarvam's Malayalam STT model
+                "model": "saaras:v1",
                 "audio": audio_base64,
-                "language_code": "ml",  # Malayalam
-                "format": "pcm",
+                "language_code": "ml",
+                "format": "wav",  # Changed from pcm to wav
                 "sample_rate": 8000,
                 "encoding": "linear16",
                 "with_timestamps": False,
                 "enable_speaker_diarization": False
             }
             
-            # Make API request
-            response = requests.post(
+            # Make API request with session
+            response = self.session.post(
                 self.stt_url,
-                headers=self.headers,
                 json=payload,
-                timeout=30
+                timeout=60  # Increased timeout
             )
             
             if response.status_code == 200:
@@ -71,12 +95,19 @@ class SarvamClient:
                     logger.debug("Empty transcript received")
                     return None
                     
+            elif response.status_code == 429:
+                logger.warning("Rate limit exceeded, waiting...")
+                time.sleep(2)
+                return None
             else:
                 logger.error(f"STT API error: {response.status_code} - {response.text}")
                 return None
                 
         except requests.exceptions.Timeout:
             logger.error("STT API timeout")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"STT API connection error: {str(e)}")
             return None
         except requests.exceptions.RequestException as e:
             logger.error(f"STT API request error: {str(e)}")
@@ -101,25 +132,30 @@ class SarvamClient:
                 logger.warning("Empty text provided to TTS")
                 return None
             
+            # Clean and validate text
+            clean_text = text.strip()
+            if len(clean_text) > 1000:  # Limit text length
+                logger.warning("Text too long, truncating")
+                clean_text = clean_text[:1000]
+            
             # Prepare request payload
             payload = {
-                "inputs": [text.strip()],
-                "target_language_code": "ml",  # Malayalam
-                "speaker": voice,  # Available: meera, etc.
+                "inputs": [clean_text],
+                "target_language_code": "ml",
+                "speaker": voice,
                 "pitch": 0,
                 "pace": 1.0,
                 "loudness": 1.0,
-                "speech_sample_rate": 8000,  # Match Exotel's requirement
+                "speech_sample_rate": 8000,
                 "enable_preprocessing": True,
-                "model": "bulbul:v1"  # Sarvam's TTS model
+                "model": "bulbul:v1"
             }
             
-            # Make API request
-            response = requests.post(
+            # Make API request with session
+            response = self.session.post(
                 self.tts_url,
-                headers=self.headers,
                 json=payload,
-                timeout=30
+                timeout=60  # Increased timeout
             )
             
             if response.status_code == 200:
@@ -136,12 +172,19 @@ class SarvamClient:
                     logger.error("No audio data in TTS response")
                     return None
                     
+            elif response.status_code == 429:
+                logger.warning("Rate limit exceeded, waiting...")
+                time.sleep(2)
+                return None
             else:
                 logger.error(f"TTS API error: {response.status_code} - {response.text}")
                 return None
                 
         except requests.exceptions.Timeout:
             logger.error("TTS API timeout")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"TTS API connection error: {str(e)}")
             return None
         except requests.exceptions.RequestException as e:
             logger.error(f"TTS API request error: {str(e)}")
@@ -158,9 +201,12 @@ class SarvamClient:
             List of available voice names
         """
         try:
-            # This endpoint may not exist in Sarvam API
-            # Return default voices for now
-            return ["meera", "ravi", "arjun"]
+            # Test connectivity first
+            if not self.test_connection():
+                return ["meera"]  # fallback
+            
+            # Return known voices for Sarvam
+            return ["meera", "ravi", "arjun", "nila"]
             
         except Exception as e:
             logger.error(f"Error getting voices: {str(e)}")
@@ -174,10 +220,12 @@ class SarvamClient:
             True if connection successful
         """
         try:
-            # Test with a simple TTS request
-            test_text = "പരീക്ഷണം"  # "Test" in Malayalam
-            result = self.text_to_speech(test_text)
-            return result is not None
+            # Simple connectivity test
+            response = self.session.get(
+                self.base_url,
+                timeout=10
+            )
+            return response.status_code < 500
             
         except Exception as e:
             logger.error(f"Connection test failed: {str(e)}")
